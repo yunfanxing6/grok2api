@@ -35,10 +35,6 @@ from app.services.grok.services.chat import GrokChatService
 from app.services.grok.utils.stream import wrap_stream_with_usage
 from app.services.token import EffortType
 
-_EDIT_UPSTREAM_MODEL = "grok-4"
-_EDIT_UPSTREAM_MODE = "MODEL_MODE_AUTO"
-
-
 @dataclass
 class ImageEditResult:
     stream: bool
@@ -49,8 +45,17 @@ class ImageEditService:
     """Image edit orchestration service."""
 
     @staticmethod
-    def _build_request_overrides(n: int) -> Dict[str, Any]:
-        return {"imageGenerationCount": max(1, int(n or 1))}
+    def _resolve_upstream(model_info: Any) -> tuple[str, str]:
+        model = getattr(model_info, "grok_model", None) or "imagine-image-edit"
+        mode = getattr(model_info, "model_mode", None) or "MODEL_MODE_FAST"
+        return model, mode
+
+    @staticmethod
+    def _build_request_overrides(n: int, image_attachments: List[str] | None = None) -> Dict[str, Any]:
+        overrides: Dict[str, Any] = {"imageGenerationCount": max(1, int(n or 1))}
+        if image_attachments:
+            overrides["imageAttachments"] = list(image_attachments)
+        return overrides
 
     async def edit(
         self,
@@ -94,17 +99,18 @@ class ImageEditService:
             tried_tokens.add(current_token)
             try:
                 file_attachments = await self._upload_images(images, current_token)
-                tool_overrides: Dict[str, Any] | None = None
-                request_overrides = self._build_request_overrides(n)
+                tool_overrides: Dict[str, Any] | None = {"imageGen": True}
+                request_overrides = self._build_request_overrides(n, file_attachments)
+                upstream_model, upstream_mode = self._resolve_upstream(model_info)
 
                 if stream:
                     response = await GrokChatService().chat(
                         token=current_token,
                         message=prompt,
-                        model=_EDIT_UPSTREAM_MODEL,
-                        mode=_EDIT_UPSTREAM_MODE,
+                        model=upstream_model,
+                        mode=upstream_mode,
                         stream=True,
-                        file_attachments=file_attachments,
+                        file_attachments=None,
                         tool_overrides=tool_overrides,
                         request_overrides=request_overrides,
                     )
@@ -132,6 +138,8 @@ class ImageEditService:
                     response_format=response_format,
                     file_attachments=file_attachments,
                     tool_overrides=tool_overrides,
+                    upstream_model=upstream_model,
+                    upstream_mode=upstream_mode,
                 )
                 try:
                     effort = (
@@ -198,6 +206,8 @@ class ImageEditService:
         response_format: str,
         file_attachments: List[str],
         tool_overrides: dict,
+        upstream_model: str,
+        upstream_mode: str,
     ) -> List[str]:
         per_call = 2
         calls_needed = max(1, (n + per_call - 1) // per_call)
@@ -206,12 +216,12 @@ class ImageEditService:
             response = await GrokChatService().chat(
                 token=token,
                 message=prompt,
-                model=_EDIT_UPSTREAM_MODEL,
-                mode=_EDIT_UPSTREAM_MODE,
+                model=upstream_model,
+                mode=upstream_mode,
                 stream=True,
-                file_attachments=file_attachments,
+                file_attachments=None,
                 tool_overrides=tool_overrides,
-                request_overrides=self._build_request_overrides(per_call),
+                request_overrides=self._build_request_overrides(per_call, file_attachments),
             )
             processor = ImageCollectProcessor(
                 "grok-imagine-1.0-edit", token, response_format=response_format
@@ -249,10 +259,29 @@ class ImageEditService:
         if len(all_images) >= n:
             return all_images[:n]
 
-        selected_images = all_images.copy()
-        while len(selected_images) < n:
-            selected_images.append("error")
-        return selected_images
+        return all_images.copy()
+
+
+def _collect_card_images(model_response: Dict[str, Any]) -> List[str]:
+    urls: List[str] = []
+    seen = set()
+    for raw in model_response.get("cardAttachmentsJson") or []:
+        if not isinstance(raw, str) or not raw.strip():
+            continue
+        try:
+            card_data = orjson.loads(raw)
+        except orjson.JSONDecodeError:
+            continue
+        if not isinstance(card_data, dict):
+            continue
+        image = card_data.get("image") or {}
+        if not isinstance(image, dict):
+            continue
+        original = image.get("original") or image.get("url")
+        if isinstance(original, str) and original and original not in seen:
+            seen.add(original)
+            urls.append(original)
+    return urls
 
 
 class ImageStreamProcessor(BaseProcessor):
@@ -333,7 +362,11 @@ class ImageStreamProcessor(BaseProcessor):
 
                 # modelResponse
                 if mr := resp.get("modelResponse"):
-                    if urls := _collect_images(mr):
+                    urls = _collect_images(mr)
+                    for card_url in _collect_card_images(mr):
+                        if card_url not in urls:
+                            urls.append(card_url)
+                    if urls:
                         for url in urls:
                             if self.response_format == "url":
                                 processed = await self.process_url(url, "image")
@@ -492,7 +525,11 @@ class ImageCollectProcessor(BaseProcessor):
                 resp = data.get("result", {}).get("response", {})
 
                 if mr := resp.get("modelResponse"):
-                    if urls := _collect_images(mr):
+                    urls = _collect_images(mr)
+                    for card_url in _collect_card_images(mr):
+                        if card_url not in urls:
+                            urls.append(card_url)
+                    if urls:
                         for url in urls:
                             if self.response_format == "url":
                                 processed = await self.process_url(url, "image")

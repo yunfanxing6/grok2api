@@ -14,6 +14,7 @@ from app.core.auth import (
     is_function_enabled,
 )
 from app.core.config import get_config
+from app.core.exceptions import AppException
 from app.core.logger import logger
 from app.api.v1.image import resolve_aspect_ratio
 from app.services.grok.services.image import ImageGenerationService
@@ -258,7 +259,7 @@ async def function_imagine_ws(websocket: WebSocket):
                     {
                         "type": "error",
                         "message": str(e),
-                        "code": "internal_error",
+                        "code": e.code if isinstance(e, AppException) and e.code else "internal_error",
                     }
                 )
                 await asyncio.sleep(1.5)
@@ -456,7 +457,7 @@ async def function_imagine_sse(
                 except Exception as e:
                     logger.warning(f"Imagine SSE error: {e}")
                     yield (
-                        f"data: {orjson.dumps({'type': 'error', 'message': str(e), 'code': 'internal_error'}).decode()}\n\n"
+                        f"data: {orjson.dumps({'type': 'error', 'message': str(e), 'code': e.code if isinstance(e, AppException) and e.code else 'internal_error'}).decode()}\n\n"
                     )
                     await asyncio.sleep(1.5)
 

@@ -43,6 +43,12 @@ class ImageGenerationService:
     """Image generation orchestration service."""
 
     @staticmethod
+    def _max_token_retries() -> int:
+        default_retries = max(1, int(get_config("retry.max_retry") or 3))
+        configured = int(get_config("image.max_token_retries", default_retries) or default_retries)
+        return max(default_retries, min(configured, 30))
+
+    @staticmethod
     def _app_chat_request_overrides(
         count: int,
         enable_nsfw: Optional[bool],
@@ -69,7 +75,7 @@ class ImageGenerationService:
         enable_nsfw: Optional[bool] = None,
         chat_format: bool = False,
     ) -> ImageGenerationResult:
-        max_token_retries = int(get_config("retry.max_retry") or 3)
+        max_token_retries = self._max_token_retries()
         tried_tokens: set[str] = set()
         last_error: Optional[Exception] = None
 
@@ -409,13 +415,14 @@ class ImageGenerationService:
             enable_nsfw = bool(get_config("image.nsfw"))
         all_images: List[str] = []
         seen = set()
+        rate_limit_error: Optional[Exception] = None
         expected_per_call = 6
         calls_needed = max(1, int(math.ceil(n / expected_per_call)))
         calls_needed = min(calls_needed, n)
 
         async def _fetch_batch(call_target: int, call_token: str):
             stream_retries = int(get_config("image.blocked_parallel_attempts") or 5) + 1
-            stream_retries = max(1, min(stream_retries, 10))
+            stream_retries = max(1, min(stream_retries, 30))
             upstream = image_service.stream(
                 token=call_token,
                 prompt=prompt,
@@ -442,6 +449,8 @@ class ImageGenerationService:
         for batch in results:
             if isinstance(batch, Exception):
                 logger.warning(f"WS batch failed: {batch}")
+                if rate_limited(batch):
+                    rate_limit_error = batch
                 continue
             for img in batch:
                 if img not in seen:
@@ -457,7 +466,7 @@ class ImageGenerationService:
         if len(all_images) < n:
             remaining = n - len(all_images)
             extra_attempts = int(get_config("image.blocked_parallel_attempts") or 5)
-            extra_attempts = max(0, min(extra_attempts, 10))
+            extra_attempts = max(0, min(extra_attempts, 30))
             parallel_enabled = bool(get_config("image.blocked_parallel_enabled", True))
             if extra_attempts > 0:
                 logger.warning(
@@ -502,6 +511,8 @@ class ImageGenerationService:
                 for batch in extra_results:
                     if isinstance(batch, Exception):
                         logger.warning(f"WS recovery batch failed: {batch}")
+                        if rate_limited(batch):
+                            rate_limit_error = batch
                         continue
                     for img in batch:
                         if img not in seen:
@@ -517,6 +528,8 @@ class ImageGenerationService:
                 )
 
         if len(all_images) < n:
+            if rate_limit_error:
+                raise rate_limit_error
             logger.error(
                 f"Image generation failed after recovery attempts: finals={len(all_images)}/{n}, "
                 f"blocked_parallel_attempts={int(get_config('image.blocked_parallel_attempts') or 5)}"

@@ -98,10 +98,22 @@ class UpstreamException(AppException):
         status_code: int = 502,
         code: str = "upstream_error",
     ):
+        if (
+            status_code == 502
+            and isinstance(details, dict)
+            and details.get("status") == 429
+        ):
+            status_code = 429
+        error_type = ErrorType.SERVER.value
+        normalized_code = code
+        if status_code == 429:
+            error_type = ErrorType.RATE_LIMIT.value
+            if code == "upstream_error":
+                normalized_code = "rate_limit_exceeded"
         super().__init__(
             message=message,
-            error_type=ErrorType.SERVER.value,
-            code=code,
+            error_type=error_type,
+            code=normalized_code,
             status_code=status_code,
         )
         self.details = details

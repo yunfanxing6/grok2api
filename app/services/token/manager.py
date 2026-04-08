@@ -417,10 +417,7 @@ class TokenManager:
         primary_pool = SUPER_POOL_NAME if requires_super else BASIC_POOL_NAME
 
         if pool_candidates:
-            ordered_pools = list(pool_candidates)
-            if primary_pool in ordered_pools:
-                ordered_pools.remove(primary_pool)
-                ordered_pools.insert(0, primary_pool)
+            ordered_pools = list(dict.fromkeys(pool_candidates))
         else:
             fallback_pool = BASIC_POOL_NAME if requires_super else SUPER_POOL_NAME
             ordered_pools = [primary_pool, fallback_pool]

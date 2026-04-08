@@ -252,6 +252,8 @@ class ModelService:
         model = cls.get(model_id)
         if model and model.tier == Tier.SUPER:
             return ["ssoSuper"]
+        if model and (model.is_image or model.is_image_edit or model.is_video):
+            return ["ssoSuper", "ssoBasic"]
         # 基础模型优先使用 basic 池，缺失时可回退到 super 池
         return ["ssoBasic", "ssoSuper"]
 

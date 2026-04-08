@@ -771,6 +771,12 @@ class _VideoChainSSEWriter:
 class VideoService:
     """Video generation service."""
 
+    @staticmethod
+    def _max_token_retries() -> int:
+        default_retries = max(1, int(get_config("retry.max_retry") or 1))
+        configured = int(get_config("video.max_token_retries", default_retries) or default_retries)
+        return max(default_retries, min(configured, 30))
+
     async def create_post(
         self,
         token: str,
@@ -920,7 +926,7 @@ class VideoService:
 
         prompt, image_attachments = _extract_last_user_prompt_and_images(messages)
 
-        max_token_retries = max(1, int(get_config("retry.max_retry") or 1))
+        max_token_retries = VideoService._max_token_retries()
         last_error: Exception | None = None
 
         for attempt in range(max_token_retries):

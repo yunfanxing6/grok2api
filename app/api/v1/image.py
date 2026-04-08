@@ -127,9 +127,13 @@ def _validate_common_request(
 
 def validate_generation_request(request: ImageGenerationRequest):
     """验证图片生成请求参数"""
-    if request.model != "grok-imagine-1.0":
+    allowed_models = {"grok-imagine-1.0", "grok-imagine-1.0-fast"}
+    if request.model not in allowed_models:
         raise ValidationException(
-            message="The model `grok-imagine-1.0` is required for image generation.",
+            message=(
+                "Image generation only supports `grok-imagine-1.0` or "
+                "`grok-imagine-1.0-fast`."
+            ),
             param="model",
             code="model_not_supported",
         )

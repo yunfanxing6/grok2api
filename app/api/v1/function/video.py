@@ -9,6 +9,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.core.auth import verify_function_key
+from app.core.exceptions import AppException
 from app.core.logger import logger
 from app.services.grok.services.video import VideoService
 from app.services.grok.services.model import ModelService
@@ -268,7 +269,8 @@ async def function_video_sse(request: Request, task_id: str = Query("")):
                 yield chunk
         except Exception as e:
             logger.warning(f"Function video SSE error: {e}")
-            payload = {"error": str(e), "code": "internal_error"}
+            code = e.code if isinstance(e, AppException) and e.code else "internal_error"
+            payload = {"error": str(e), "code": code}
             yield f"data: {orjson.dumps(payload).decode()}\n\n"
             yield "data: [DONE]\n\n"
         finally:
