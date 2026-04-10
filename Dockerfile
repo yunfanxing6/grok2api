@@ -74,7 +74,7 @@ RUN mkdir -p /app/data /app/logs \
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-    CMD wget -qO /dev/null http://localhost:${SERVER_PORT:-8000}/health || exit 1
+    CMD python -c "import sys, urllib.request; urllib.request.urlopen('http://127.0.0.1:%s/health' % ('${SERVER_PORT:-8000}'), timeout=3); sys.exit(0)"
 
 ENTRYPOINT ["/app/scripts/entrypoint.sh"]
 
