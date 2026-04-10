@@ -1,12 +1,11 @@
+# ── Builder ───────────────────────────────────────────────────────────────────
 FROM python:3.13-alpine AS builder
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     TZ=Asia/Shanghai \
-    # 把 uv 包安装到系统 Python 环境
     UV_PROJECT_ENVIRONMENT=/opt/venv
 
-# 确保 uv 的 bin 目录
 ENV PATH="$UV_PROJECT_ENVIRONMENT/bin:$PATH"
 
 RUN apk add --no-cache \
@@ -22,8 +21,8 @@ RUN apk add --no-cache \
 
 WORKDIR /app
 
-# 安装 uv
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+# Pin uv to a minor release for more reproducible builds.
+COPY --from=ghcr.io/astral-sh/uv:0.6 /uv /uvx /bin/
 
 COPY pyproject.toml uv.lock ./
 
@@ -33,9 +32,11 @@ RUN uv sync --frozen --no-dev --no-install-project \
     && find /opt/venv -type d -name "tests" -prune -exec rm -rf {} + \
     && find /opt/venv -type d -name "test" -prune -exec rm -rf {} + \
     && find /opt/venv -type d -name "testing" -prune -exec rm -rf {} + \
-    && find /opt/venv -type f -name "*.so" -exec strip --strip-unneeded {} + || true \
+    && find /opt/venv -type f -name "*.so" -exec strip --strip-unneeded {} + 2>/dev/null; true \
     && rm -rf /root/.cache /tmp/uv-cache
 
+
+# ── Runtime ───────────────────────────────────────────────────────────────────
 FROM python:3.13-alpine
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -61,17 +62,20 @@ WORKDIR /app
 
 COPY --from=builder /opt/venv /opt/venv
 
-COPY config.defaults.toml ./
+COPY pyproject.toml config.defaults.toml ./
 COPY app ./app
 COPY _public ./_public
 COPY main.py ./
 COPY scripts ./scripts
 
 RUN mkdir -p /app/data /app/logs \
-    && chmod +x /app/scripts/entrypoint.sh
+    && chmod +x /app/scripts/entrypoint.sh /app/scripts/init_storage.sh
 
 EXPOSE 8000
 
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD wget -qO /dev/null http://localhost:${SERVER_PORT:-8000}/health || exit 1
+
 ENTRYPOINT ["/app/scripts/entrypoint.sh"]
 
-CMD ["sh", "-c", "granian --interface asgi --host ${SERVER_HOST:-0.0.0.0} --port ${SERVER_PORT:-8000} --workers ${SERVER_WORKERS:-1} main:app"]
+CMD ["sh", "-c", "exec granian --interface asgi --host ${SERVER_HOST:-0.0.0.0} --port ${SERVER_PORT:-8000} --workers ${SERVER_WORKERS:-1} main:app"]
